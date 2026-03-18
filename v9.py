@@ -1300,14 +1300,25 @@ def _merge_dims_to_conds(
     df_vol: pd.DataFrame,
     df_kl:  pd.DataFrame,
     wr_thr: float,
+    pnl_thr: float = 0.0,
 ) -> pd.DataFrame:
     """
     把三個維度的回測結果合併成 Telegram 條件表格式。
-    勝率 ≥ wr_thr 的組合才納入，去重後按勝率排名。
+    同時滿足 勝率 ≥ wr_thr 且 平均盈虧(%) ≥ pnl_thr 的組合才納入。
+    去重後按勝率排名。
     """
+    def _pass(r) -> bool:
+        wr_ok  = r["勝率(%)"] >= wr_thr
+        pnl_ok = (pnl_thr == 0.0) or (
+            "平均盈虧(%)" in r.index and
+            pd.notna(r["平均盈虧(%)"]) and
+            float(r["平均盈虧(%)"]) >= pnl_thr
+        )
+        return wr_ok and pnl_ok
+
     rows = []
     for _, r in df_sig.iterrows():
-        if r["勝率(%)"] >= wr_thr:
+        if _pass(r):
             rows.append({
                 "異動標記":   r["信號組合"].replace(" + ", ", "),
                 "成交量標記": "—",
@@ -1317,7 +1328,7 @@ def _merge_dims_to_conds(
                 "_wr":        r["勝率(%)"],
             })
     for _, r in df_vol.iterrows():
-        if r["勝率(%)"] >= wr_thr:
+        if _pass(r):
             rows.append({
                 "異動標記":   r["信號組合"].replace(" + ", ", "),
                 "成交量標記": r.get("成交量標記", "—"),
@@ -1327,7 +1338,7 @@ def _merge_dims_to_conds(
                 "_wr":        r["勝率(%)"],
             })
     for _, r in df_kl.iterrows():
-        if r["勝率(%)"] >= wr_thr:
+        if _pass(r):
             rows.append({
                 "異動標記":   r["信號組合"].replace(" + ", ", "),
                 "成交量標記": "—",
@@ -1353,24 +1364,76 @@ st.title("📊 股票監控儀表板")
 st.caption(f"⏱ 更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ── 一鍵全部股票回測 ─────────────────────────────────────────────────────────
+# yfinance period → actual fetch parameter mapping
+_AUTO_PERIOD_MAP = {
+    "1d":"1d","5d":"5d","1mo":"1mo","3mo":"3mo","6mo":"6mo",
+    "1y":"1y","2y":"2y","5y":"5y","10y":"max",   # 10y 用 max 代替
+}
+# 各 interval 允許的最大 period（yfinance 限制）
+_AUTO_INTERVAL_MAX = {
+    "1m": {"1d","5d"},                                          # 最多 7 天
+    "5m": {"1d","5d","1mo"},                                    # 最多 60 天
+    "15m":{"1d","5d","1mo"},
+    "30m":{"1d","5d","1mo"},
+    "1h": {"1d","5d","1mo","3mo","6mo","1y","2y"},              # 最多 730 天
+    "1d": {"1d","5d","1mo","3mo","6mo","1y","2y","5y","10y"},
+    "1wk":{"1mo","3mo","6mo","1y","2y","5y","10y"},
+    "1mo":{"3mo","6mo","1y","2y","5y","10y"},
+}
+
 with st.expander("⚡ 一鍵全部股票自動回測 & 更新 Telegram 條件表", expanded=False):
     st.caption(
         "對所有監控股票依序執行回測，自動用三維合併結果覆蓋各自的 Telegram 觸發條件表。"
     )
-    _auto_col1, _auto_col2, _auto_col3, _auto_col4 = st.columns(4)
-    _auto_period   = _auto_col1.selectbox(
-        "時間範圍", ["3mo","6mo","1y","2y","5y"], index=2, key="auto_bt_period")
-    _auto_interval = _auto_col2.selectbox(
-        "K線間隔", ["1d","1wk","1mo"], index=0, key="auto_bt_interval")
-    _auto_wr_thr   = _auto_col3.number_input(
-        "合併勝率閾值 (%)", min_value=0, max_value=95, value=60, step=5,
+
+    # ── 5 個參數（第一行 2 個，第二行 3 個） ──────────────────────────────────
+    _ac1, _ac2 = st.columns(2)
+    _auto_interval = _ac1.selectbox(
+        "K線間隔",
+        ["1m","5m","15m","30m","1h","1d","1wk","1mo"],
+        index=5,   # 預設 1d
+        key="auto_bt_interval",
+        help="短週期間隔受 yfinance 限制，可選時間範圍較少",
+    )
+    # 根據 interval 動態過濾可用 period
+    _allowed_periods = _AUTO_INTERVAL_MAX.get(_auto_interval,
+                       {"1d","5d","1mo","3mo","6mo","1y","2y","5y","10y"})
+    _all_periods_ordered = ["1d","5d","1mo","3mo","6mo","1y","2y","5y","10y"]
+    _period_opts = [p for p in _all_periods_ordered if p in _allowed_periods]
+    _period_def  = "1y" if "1y" in _period_opts else _period_opts[-1]
+    _auto_period = _ac2.selectbox(
+        "時間範圍",
+        _period_opts,
+        index=_period_opts.index(_period_def),
+        key="auto_bt_period",
+        help="10y = 使用 yfinance max（全部歷史）",
+    )
+
+    _bc1, _bc2, _bc3 = st.columns(3)
+    _auto_wr_thr  = _bc1.number_input(
+        "合併勝率閾值 (%)", min_value=0, max_value=100, value=90, step=5,
         key="auto_bt_wr_thr",
-        help="三維合併時，只納入勝率 ≥ 此值的組合",
+        help="只納入勝率 ≥ 此值的組合",
     )
-    _auto_min_occ  = _auto_col4.number_input(
-        "最少出現次數", min_value=2, max_value=20, value=3, step=1,
+    _auto_min_occ = _bc2.number_input(
+        "最少出現次數", min_value=2, max_value=50, value=10, step=1,
         key="auto_bt_min_occ",
+        help="樣本過少的組合過濾",
     )
+    _auto_pnl_thr = _bc3.number_input(
+        "最低平均盈虧 (%)", min_value=-10.0, max_value=20.0, value=0.5, step=0.1,
+        format="%.1f",
+        key="auto_bt_pnl_thr",
+        help="同時滿足勝率閾值 且 平均盈虧 ≥ 此值才納入；設 0 不限制",
+    )
+
+    # 短週期警告
+    if _auto_interval in ("1m","5m","15m","30m","1h"):
+        st.warning(
+            f"⚠️ {_auto_interval} 短週期：yfinance 限制資料範圍，"
+            f"樣本數可能較少，建議降低「最少出現次數」至 3～5。",
+            icon="⚠️",
+        )
 
     if st.button(
         f"⚡ 開始自動回測所有股票（共 {len(selected_tickers)} 支）",
@@ -1378,45 +1441,51 @@ with st.expander("⚡ 一鍵全部股票自動回測 & 更新 Telegram 條件表
         key="auto_bt_run",
         disabled=(len(selected_tickers) == 0),
     ):
-        _auto_results = []   # list of dict: ticker, status, n_conds, msg
+        # 實際傳給 yfinance 的 period（10y → max）
+        _fetch_period = _AUTO_PERIOD_MAP.get(_auto_period, _auto_period)
+
+        _auto_results = []
         _prog_bar  = st.progress(0, text="準備開始…")
         _status_ph = st.empty()
 
         for _ai, _atk in enumerate(selected_tickers):
-            _prog = (_ai) / len(selected_tickers)
+            _prog = _ai / len(selected_tickers)
             _prog_bar.progress(_prog, text=f"正在處理 {_atk}（{_ai+1}/{len(selected_tickers)}）…")
-            _status_ph.info(f"⏳ **{_atk}**：下載資料並計算指標中…")
+            _status_ph.info(f"⏳ **{_atk}**：下載 {_auto_period} / {_auto_interval} 資料並計算中…")
 
             _dsig, _dvol, _dkl, _n_or_err = _run_backtest_for_ticker(
-                tk          = _atk,
-                period      = _auto_period,
-                interval    = _auto_interval,
-                min_combo   = 2,
-                max_combo   = 3,
-                min_occ     = int(_auto_min_occ),
+                tk        = _atk,
+                period    = _fetch_period,
+                interval  = _auto_interval,
+                min_combo = 2,
+                max_combo = 3,
+                min_occ   = int(_auto_min_occ),
             )
 
             if _dsig is None:
                 _auto_results.append({
-                    "ticker": _atk,
-                    "status": "❌",
-                    "n_conds": 0,
+                    "ticker": _atk, "status": "❌", "n_conds": 0,
                     "msg": str(_n_or_err),
                 })
                 _status_ph.error(f"❌ **{_atk}** 回測失敗：{_n_or_err}")
                 continue
 
-            # 合併三維 → 條件表
-            _merged = _merge_dims_to_conds(_dsig, _dvol, _dkl, float(_auto_wr_thr))
+            # 合併三維 → 條件表（勝率 + 平均盈虧雙重篩選）
+            _merged = _merge_dims_to_conds(
+                _dsig, _dvol, _dkl,
+                wr_thr  = float(_auto_wr_thr),
+                pnl_thr = float(_auto_pnl_thr),
+            )
 
             if _merged.empty:
+                _cond_str = f"勝率 ≥ {_auto_wr_thr}%"
+                if _auto_pnl_thr != 0:
+                    _cond_str += f" 且 平均盈虧 ≥ {_auto_pnl_thr}%"
                 _auto_results.append({
-                    "ticker": _atk,
-                    "status": "⚠️",
-                    "n_conds": 0,
-                    "msg": f"無勝率 ≥ {_auto_wr_thr}% 的組合，條件表未更新",
+                    "ticker": _atk, "status": "⚠️", "n_conds": 0,
+                    "msg": f"無符合條件（{_cond_str}）的組合，條件表未更新",
                 })
-                _status_ph.warning(f"⚠️ **{_atk}**：無勝率 ≥ {_auto_wr_thr}% 的組合，條件表未更新")
+                _status_ph.warning(f"⚠️ **{_atk}**：無符合條件的組合")
                 continue
 
             # 寫入該股票的 Telegram 條件表
@@ -1424,37 +1493,39 @@ with st.expander("⚡ 一鍵全部股票自動回測 & 更新 Telegram 條件表
             _tg_save(_merged, _atk)
 
             _auto_results.append({
-                "ticker": _atk,
-                "status": "✅",
+                "ticker": _atk, "status": "✅",
                 "n_conds": len(_merged),
-                "msg": f"寫入 {len(_merged)} 條條件（{_auto_period}/{_auto_interval}，勝率 ≥ {_auto_wr_thr}%）",
+                "msg": (
+                    f"寫入 {len(_merged)} 條條件"
+                    f"（{_auto_period}/{_auto_interval}，"
+                    f"勝率 ≥ {_auto_wr_thr}%，盈虧 ≥ {_auto_pnl_thr}%）"
+                ),
             })
             _status_ph.success(f"✅ **{_atk}**：寫入 {len(_merged)} 條條件")
 
         _prog_bar.progress(1.0, text="全部完成！")
         _status_ph.empty()
 
-        # 總結
-        _ok_list  = [r for r in _auto_results if r["status"] == "✅"]
+        # ── 總結 ────────────────────────────────────────────────────────────
+        _ok_list   = [r for r in _auto_results if r["status"] == "✅"]
         _warn_list = [r for r in _auto_results if r["status"] == "⚠️"]
-        _err_list = [r for r in _auto_results if r["status"] == "❌"]
+        _err_list  = [r for r in _auto_results if r["status"] == "❌"]
 
         st.markdown("---")
         st.subheader("📊 自動回測結果總結")
         _sc1, _sc2, _sc3 = st.columns(3)
         _sc1.metric("✅ 成功", len(_ok_list))
-        _sc2.metric("⚠️ 無結果", len(_warn_list))
+        _sc2.metric("⚠️ 無符合條件", len(_warn_list))
         _sc3.metric("❌ 失敗", len(_err_list))
 
         for _r in _auto_results:
-            _icon = _r["status"]
-            st.write(f"{_icon} **{_r['ticker']}**：{_r['msg']}")
+            st.write(f"{_r['status']} **{_r['ticker']}**：{_r['msg']}")
 
         if _ok_list:
             n_ok = len(_ok_list)
             st.success(
-                f"🎯 成功更新 **{n_ok}** 支股票的 Telegram 條件表！\n"
-                "請切換到各股票 Tab 確認條件表內容。",
+                f"🎯 成功更新 **{n_ok}** 支股票的 Telegram 條件表！"
+                " 請切換到各股票 Tab 確認條件表內容。",
                 icon="🎯",
             )
             st.balloons()
