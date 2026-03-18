@@ -1409,22 +1409,32 @@ with st.expander("⚡ 一鍵全部股票自動回測 & 更新 Telegram 條件表
         help="10y = 使用 yfinance max（全部歷史）",
     )
 
-    _bc1, _bc2, _bc3 = st.columns(3)
-    _auto_wr_thr  = _bc1.number_input(
+    _bc1, _bc2, _bc3, _bc4, _bc5 = st.columns(5)
+    _auto_wr_thr   = _bc1.number_input(
         "合併勝率閾值 (%)", min_value=0, max_value=100, value=90, step=5,
         key="auto_bt_wr_thr",
         help="只納入勝率 ≥ 此值的組合",
     )
-    _auto_min_occ = _bc2.number_input(
+    _auto_min_occ  = _bc2.number_input(
         "最少出現次數", min_value=2, max_value=50, value=10, step=1,
         key="auto_bt_min_occ",
         help="樣本過少的組合過濾",
     )
-    _auto_pnl_thr = _bc3.number_input(
+    _auto_pnl_thr  = _bc3.number_input(
         "最低平均盈虧 (%)", min_value=-10.0, max_value=20.0, value=0.5, step=0.1,
         format="%.1f",
         key="auto_bt_pnl_thr",
         help="同時滿足勝率閾值 且 平均盈虧 ≥ 此值才納入；設 0 不限制",
+    )
+    _auto_min_combo = _bc4.number_input(
+        "最少信號組合數", min_value=2, max_value=5, value=2, step=1,
+        key="auto_bt_min_combo",
+        help="每個組合至少包含幾個信號",
+    )
+    _auto_max_combo = _bc5.number_input(
+        "最多信號組合數", min_value=2, max_value=5, value=3, step=1,
+        key="auto_bt_max_combo",
+        help="每個組合最多包含幾個信號；越大組合數越多，回測越慢",
     )
 
     # 短週期警告
@@ -1457,8 +1467,8 @@ with st.expander("⚡ 一鍵全部股票自動回測 & 更新 Telegram 條件表
                 tk        = _atk,
                 period    = _fetch_period,
                 interval  = _auto_interval,
-                min_combo = 2,
-                max_combo = 3,
+                min_combo = int(_auto_min_combo),
+                max_combo = int(max(_auto_max_combo, _auto_min_combo)),
                 min_occ   = int(_auto_min_occ),
             )
 
