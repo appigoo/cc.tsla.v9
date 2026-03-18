@@ -1363,6 +1363,44 @@ def _merge_dims_to_conds(
 st.title("📊 股票監控儀表板")
 st.caption(f"⏱ 更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+# ── 全域 Telegram 開關 ────────────────────────────────────────────────────────
+if selected_tickers:
+    # 統計目前有幾支開啟
+    _n_on  = sum(1 for _tk in selected_tickers
+                 if st.session_state.get(f"tg_enabled_{_tk}", True))
+    _n_all = len(selected_tickers)
+    _all_on  = (_n_on == _n_all)
+    _all_off = (_n_on == 0)
+
+    _gc1, _gc2 = st.columns([1, 5])
+    with _gc1:
+        _g_label = (
+            f"🟢 全部開啟（{_n_on}/{_n_all}）" if _all_on
+            else f"🔴 全部關閉（{_n_on}/{_n_all}）" if _all_off
+            else f"⚡ 一鍵全開／全關（{_n_on}/{_n_all} 開啟）"
+        )
+        if st.button(_g_label, key="tg_global_toggle", use_container_width=True):
+            # 若目前全開 → 全關；否則（部分或全關）→ 全開
+            _new_state = not _all_on
+            for _tk in selected_tickers:
+                st.session_state[f"tg_enabled_{_tk}"] = _new_state
+            st.rerun()
+    with _gc2:
+        if _all_on:
+            st.success(f"🟢 **全部 {_n_all} 支股票 Telegram 已開啟**", icon="✅")
+        elif _all_off:
+            st.warning(f"🔴 **全部 {_n_all} 支股票 Telegram 已關閉**（調參模式）", icon="🔕")
+        else:
+            _on_names  = [t for t in selected_tickers
+                          if st.session_state.get(f"tg_enabled_{t}", True)]
+            _off_names = [t for t in selected_tickers
+                          if not st.session_state.get(f"tg_enabled_{t}", True)]
+            st.info(
+                f"⚡ **部分開啟**：🟢 {', '.join(_on_names)}　"
+                f"🔴 {', '.join(_off_names)}",
+                icon="ℹ️",
+            )
+
 # ── 一鍵全部股票回測 ─────────────────────────────────────────────────────────
 # yfinance period → actual fetch parameter mapping
 _AUTO_PERIOD_MAP = {
