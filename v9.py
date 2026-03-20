@@ -994,7 +994,7 @@ with st.sidebar:
     input_tickers     = st.text_input("股票代號（逗號分隔）",
                                        "TSLA, UVXY, UVIX, NIO, TSLL, XPEV, GLD, META, GOOGL, AAPL, NVDA, AMZN, TSM, MSFT")
     selected_period   = st.selectbox("時間範圍",
-                                      ["1d","5d","1mo","3mo","6mo","1y","2y","5y","ytd","max"], index=5)
+                                      ["1d","5d","1mo","3mo","6mo","1y","2y","5y","ytd","max"], index=6)
     selected_interval = st.selectbox("資料間隔",
                                       ["1m","5m","15m","30m","60m","1h","1d","5d","1wk","1mo"], index=6)
     st.subheader("信號閾值")
